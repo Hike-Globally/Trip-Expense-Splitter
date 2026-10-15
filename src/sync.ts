@@ -1,5 +1,5 @@
 import type { DB } from "./types";
-import { KEY } from "./store";
+import { KEY, adoptSession } from "./store";
 
 let bc: BroadcastChannel | null = null;
 try {
@@ -18,9 +18,12 @@ export function broadcast(db: DB) {
 }
 
 export function subscribe(cb: (db: DB) => void): () => void {
+  // Another tab's data must never change who *this* tab is signed in as.
+  const deliver = (next: DB) => cb(adoptSession(next));
+
   const onMsg = (e: MessageEvent) => {
     if (e.data && e.data.type === "db" && e.data.db) {
-      cb(e.data.db as DB);
+      deliver(e.data.db as DB);
     }
   };
   bc?.addEventListener("message", onMsg);
@@ -28,7 +31,7 @@ export function subscribe(cb: (db: DB) => void): () => void {
     if (e.key === KEY || e.key === "splitide-sync-ping") {
       try {
         const raw = localStorage.getItem(KEY);
-        if (raw) cb(JSON.parse(raw) as DB);
+        if (raw) deliver(JSON.parse(raw) as DB);
       } catch {}
     }
   };

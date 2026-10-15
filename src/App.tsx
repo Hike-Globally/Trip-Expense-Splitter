@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { DB, Expense, SplitType, Trip, User, Comment } from "./types";
 import { CATEGORIES } from "./types";
 import * as store from "./store";
+import Auth from "./Auth";
 import { CURRENCIES, convert, formatMoney } from "./fx";
 import { balances, simplify } from "./settle";
 import { broadcast, subscribe } from "./sync";
@@ -15,7 +16,9 @@ export default function App() {
   const [db, setDb] = useState<DB>(() => store.load());
   const user = db.users.find((u) => u.id === db.sessionUserId) ?? null;
   const [tripId, setTripId] = useState<string | null>(null);
-  const trip = db.trips.find((t) => t.id === tripId) ?? null;
+  /** Only ever the signed-in member's own trip — never a leftover selection. */
+  const trip =
+    db.trips.find((t) => t.id === tripId && t.members.some((m) => m.userId === user?.id)) ?? null;
   const [pendingJoin, setPendingJoin] = useState<string | null>(() => {
     try {
       return new URLSearchParams(window.location.search).get("join");
@@ -36,6 +39,12 @@ export default function App() {
     });
     return unsub;
   }, []);
+
+  // Signing in as somebody else starts from their trip list, not the last
+  // screen this browser was on.
+  useEffect(() => {
+    setTripId(null);
+  }, [user?.id]);
 
   useEffect(() => {
     if (!user || !pendingJoin) return;
@@ -59,6 +68,7 @@ export default function App() {
     return (
       <Auth
         db={db}
+        inviteCode={pendingJoin}
         onDone={(next) => {
           refresh(next);
         }}
@@ -89,80 +99,48 @@ export default function App() {
   );
 }
 
-function Auth({ db, onDone }: { db: DB; onDone: (d: DB) => void }) {
-  const [mode, setMode] = useState<"in" | "up">("in");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [err, setErr] = useState("");
-
-  function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setErr("");
-    try {
-      if (mode === "up") store.register(db, name, email, password);
-      else store.login(db, email, password);
-      onDone(db);
-    } catch (ex) {
-      setErr((ex as Error).message);
-    }
-  }
+function AccountMenu({ user, onSignOut }: { user: User; onSignOut: () => void }) {
+  const [open, setOpen] = useState(false);
+  const initial = (user.name.trim()[0] ?? "?").toUpperCase();
 
   return (
-    <div className="auth-wrap">
-      <div className="auth-hero">
-        <div className="brand">Splitide</div>
-        <p className="lede">
-          Split the dinner, the taxi, the temple tickets — in any currency. Settle in the fewest
-          taps at the table.
-        </p>
-      </div>
-      <div className="auth-card">
-        <div className="tabs">
-          <button className={`tab ${mode === "in" ? "on" : ""}`} onClick={() => setMode("in")}>
-            Sign in
-          </button>
-          <button className={`tab ${mode === "up" ? "on" : ""}`} onClick={() => setMode("up")}>
-            Create account
-          </button>
-        </div>
-        {err && <div className="error">{err}</div>}
-        <form onSubmit={submit}>
-          {mode === "up" && (
-            <div className="field">
-              <label>Name</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} required />
-            </div>
-          )}
-          <div className="field">
-            <label>Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-            />
+    <div className="account">
+      <button
+        type="button"
+        className="user-chip account-btn"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Account menu for ${user.name}`}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="avatar">{initial}</span>
+        <span className="hide-xs">{user.name}</span>
+      </button>
+      {open && (
+        <>
+          <button
+            type="button"
+            className="account-backdrop"
+            aria-label="Close account menu"
+            onClick={() => setOpen(false)}
+          />
+          <div className="account-pop" role="menu">
+            <div className="account-name">{user.name}</div>
+            <div className="meta">{user.email}</div>
+            <button
+              type="button"
+              role="menuitem"
+              className="btn btn-ghost account-signout"
+              onClick={() => {
+                setOpen(false);
+                onSignOut();
+              }}
+            >
+              Sign out
+            </button>
           </div>
-          <div className="field">
-            <label>Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              minLength={6}
-            />
-          </div>
-          <button className="btn btn-primary" type="submit">
-            {mode === "in" ? "Enter" : "Join Splitide"}
-          </button>
-        </form>
-        <p className="hint">
-          Demo accounts (password <b>demo123</b>): alice@demo.com, bob@demo.com, cara@demo.com.
-          They share a seeded Kathmandu trip.
-        </p>
-      </div>
+        </>
+      )}
     </div>
   );
 }
@@ -199,20 +177,13 @@ function TripList({
     <div className="app">
       <header className="topbar">
         <div className="brand-sm">Splitide</div>
-        <div className="user-chip">
-          <span className="avatar">{user.name[0]}</span>
-          <span className="hide-xs">{user.name}</span>
-          <button
-            className="btn btn-ghost"
-            style={{ minHeight: 36, padding: "6px 12px", width: "auto" }}
-            onClick={() => {
-              store.logout(db);
-              onChange(db);
-            }}
-          >
-            Out
-          </button>
-        </div>
+        <AccountMenu
+          user={user}
+          onSignOut={() => {
+            store.logout(db);
+            onChange(db);
+          }}
+        />
       </header>
       <main className="page">
         <h1 className="display">Your trips</h1>
@@ -469,15 +440,21 @@ function TripView({
             </button>
           ))}
         </nav>
-        <div className="user-chip">
-          <span className="avatar">{user.name[0]}</span>
+        <div className="topbar-right">
           <button
-            className="btn btn-ghost"
-            style={{ minHeight: 36, padding: "6px 12px", width: "auto" }}
+            className="btn btn-ghost btn-icon"
+            aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
             onClick={() => setShowNotifications(true)}
           >
             🔔 {unread > 0 ? unread : ""}
           </button>
+          <AccountMenu
+            user={user}
+            onSignOut={() => {
+              store.logout(db);
+              onChange(db);
+            }}
+          />
         </div>
       </header>
 
