@@ -68,9 +68,28 @@ section("trips still sync live between the tabs");
   check("the expense survived being shared", dbOf(bob).trips[0].expenses.some((e) => e.title === "Sunrise taxi"));
 }
 
-section("sign out is reachable from inside a trip");
+section("the trip header still works");
 {
   check("account menu is in the trip header", !!alice.q('[aria-label^="Account menu"]'));
+  const bell = alice.q('[aria-label^="Notifications"]');
+  check("notifications bell is still there", !!bell, bell?.getAttribute("aria-label") ?? "(none)");
+  await click(alice, bell);
+  check("and still opens the sheet", /Mark all read/.test(alice.text()));
+  await click(alice, alice.q(".overlay"));
+  check("sheet closes again", !/Mark all read/.test(alice.text()));
+
+  const nav = alice.qa(".desktop-nav .tab");
+  check("trip tabs are still there", nav.length === 4, nav.map((b) => b.textContent.trim()).join(","));
+  await click(alice, nav.find((b) => b.textContent.trim() === "balances"));
+  check("balances tab renders", /Positive means the trip owes them/.test(alice.text()));
+  await click(alice, nav.find((b) => b.textContent.trim() === "settle"));
+  check("settle tab renders", /Settle up|Fewest payments/i.test(alice.text()), alice.text().slice(-80));
+  await click(alice, nav.find((b) => b.textContent.trim() === "expenses"));
+  check("expenses tab still lists what was logged", /Sunrise taxi/.test(alice.text()));
+}
+
+section("sign out is reachable from inside a trip");
+{
   await signOut(alice);
   check("and returns to the auth screen", !!alice.q('[role="tab"]'), alice.text().slice(0, 40));
 }
