@@ -91,6 +91,10 @@ export interface Trip {
 export interface DB {
   users: User[];
   trips: Trip[];
+  /** Last user who signed in on this device. Informational: the live session
+   *  is kept per browser tab (see store.sessionUserId). */
   sessionUserId: string | null;
+  /** Set once the app stopped sharing one session across all tabs. */
+  sessionScope?: "tab";
   notifications?: Notification[];
 }
