@@ -1,10 +1,23 @@
-import type { DB, Trip, User, Expense, Settlement } from "./types";
+import type { DB, Trip, User, Expense, Settlement, Notification, Comment } from "./types";
 import { convert } from "./fx";
 
 const KEY = "splitide-db-v1";
+export { KEY };
 
 function uid(): string {
   return crypto.randomUUID();
+}
+
+function ensure(db: DB): DB {
+  db.notifications = db.notifications ?? [];
+  for (const t of db.trips) {
+    t.defaultParticipants = t.defaultParticipants ?? t.members.map((m) => m.userId);
+    for (const e of t.expenses) {
+      e.category = e.category ?? "other";
+      e.comments = e.comments ?? [];
+    }
+  }
+  return db;
 }
 
 function seed(): DB {
@@ -53,6 +66,8 @@ function seed(): DB {
         participants: [alice.id, bob.id, cara.id],
         splitType: "equal",
         splits: [],
+        category: "food",
+        comments: [],
       },
       {
         id: uid(),
@@ -69,6 +84,8 @@ function seed(): DB {
           { userId: bob.id, value: 1 },
           { userId: cara.id, value: 2 },
         ],
+        category: "transport",
+        comments: [],
       },
       {
         id: uid(),
@@ -84,17 +101,21 @@ function seed(): DB {
           { userId: alice.id, value: 40 },
           { userId: bob.id, value: 60 },
         ],
+        category: "activities",
+        comments: [],
       },
     ],
     settlements: [],
     createdAt: new Date().toISOString(),
+    defaultParticipants: [alice.id, bob.id, cara.id],
   };
 
-  return {
+  return ensure({
     users: [alice, bob, cara],
     trips: [trip],
     sessionUserId: null,
-  };
+    notifications: [],
+  });
 }
 
 export function load(): DB {
@@ -105,7 +126,8 @@ export function load(): DB {
       save(d);
       return d;
     }
-    return JSON.parse(raw) as DB;
+    const parsed = JSON.parse(raw) as DB;
+    return ensure(parsed);
   } catch {
     const d = seed();
     save(d);
@@ -114,6 +136,7 @@ export function load(): DB {
 }
 
 export function save(db: DB) {
+  ensure(db);
   localStorage.setItem(KEY, JSON.stringify(db));
 }
 
@@ -160,6 +183,7 @@ export function createTrip(
     expenses: [],
     settlements: [],
     createdAt: new Date().toISOString(),
+    defaultParticipants: [owner.id],
   };
   db.trips.push(trip);
   save(db);
@@ -171,6 +195,9 @@ export function joinTrip(db: DB, user: User, code: string): Trip {
   if (!trip) throw new Error("No trip with that invite code.");
   if (!trip.members.some((m) => m.userId === user.id)) {
     trip.members.push({ userId: user.id, name: user.name, email: user.email });
+    trip.defaultParticipants = trip.defaultParticipants ?? [];
+    if (!trip.defaultParticipants.includes(user.id)) trip.defaultParticipants.push(user.id);
+    addNotification(db, user.id, `You joined "${trip.name}".`, trip.id);
   }
   save(db);
   return trip;
@@ -180,8 +207,21 @@ export function addExpense(db: DB, tripId: string, exp: Omit<Expense, "id">): Ex
   const trip = db.trips.find((t) => t.id === tripId);
   if (!trip) throw new Error("Trip not found");
   convert(exp.amount, exp.currency, trip.homeCurrency);
-  const full: Expense = { ...exp, id: uid() };
+  const full: Expense = { ...exp, id: uid(), comments: exp.comments ?? [], category: exp.category ?? "other" };
   trip.expenses.unshift(full);
+  // notify participants
+  for (const pid of exp.participants) {
+    if (pid !== exp.paidBy) {
+      const member = trip.members.find((m) => m.userId === pid);
+      const payer = trip.members.find((m) => m.userId === exp.paidBy);
+      addNotification(
+        db,
+        pid,
+        `You were added to "${exp.title}" (${exp.amount} ${exp.currency}) paid by ${payer?.name ?? "someone"}.`,
+        trip.id
+      );
+    }
+  }
   save(db);
   return full;
 }
@@ -190,6 +230,8 @@ export function updateExpense(db: DB, tripId: string, exp: Expense) {
   const trip = db.trips.find((t) => t.id === tripId);
   if (!trip) return;
   convert(exp.amount, exp.currency, trip.homeCurrency);
+  exp.comments = exp.comments ?? [];
+  exp.category = exp.category ?? "other";
   trip.expenses = trip.expenses.map((e) => (e.id === exp.id ? exp : e));
   save(db);
 }
@@ -234,6 +276,59 @@ export function addSuggested(
     amountHome,
     paid: false,
   });
+  save(db);
+}
+
+export function addNotification(db: DB, userId: string, text: string, tripId?: string) {
+  db.notifications = db.notifications ?? [];
+  db.notifications.unshift({
+    id: uid(),
+    userId,
+    tripId,
+    text,
+    createdAt: new Date().toISOString(),
+    read: false,
+  });
+  // keep last 50
+  if (db.notifications.length > 50) db.notifications = db.notifications.slice(0, 50);
+}
+
+export function markNotificationRead(db: DB, id: string) {
+  const n = db.notifications?.find((x) => x.id === id);
+  if (n) n.read = true;
+  save(db);
+}
+
+export function markAllNotificationsRead(db: DB, userId: string) {
+  db.notifications?.forEach((n) => {
+    if (n.userId === userId) n.read = true;
+  });
+  save(db);
+}
+
+export function setDefaultParticipants(db: DB, tripId: string, ids: string[]) {
+  const trip = db.trips.find((t) => t.id === tripId);
+  if (!trip) return;
+  trip.defaultParticipants = ids;
+  save(db);
+}
+
+export function addComment(db: DB, tripId: string, expenseId: string, userId: string, text: string) {
+  const trip = db.trips.find((t) => t.id === tripId);
+  if (!trip) return;
+  const exp = trip.expenses.find((e) => e.id === expenseId);
+  if (!exp) return;
+  exp.comments = exp.comments ?? [];
+  exp.comments.push({ id: uid(), userId, text: text.trim(), createdAt: new Date().toISOString() });
+  save(db);
+}
+
+export function deleteComment(db: DB, tripId: string, expenseId: string, commentId: string) {
+  const trip = db.trips.find((t) => t.id === tripId);
+  if (!trip) return;
+  const exp = trip.expenses.find((e) => e.id === expenseId);
+  if (!exp?.comments) return;
+  exp.comments = exp.comments.filter((c) => c.id !== commentId);
   save(db);
 }
 

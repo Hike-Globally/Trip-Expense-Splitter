@@ -1,5 +1,16 @@
 export type SplitType = "equal" | "shares" | "percent" | "exact";
 
+export type Category = "food" | "stay" | "transport" | "activities" | "shopping" | "other";
+
+export const CATEGORIES: { id: Category; label: string }[] = [
+  { id: "food", label: "Food" },
+  { id: "stay", label: "Stay" },
+  { id: "transport", label: "Transport" },
+  { id: "activities", label: "Activities" },
+  { id: "shopping", label: "Shopping" },
+  { id: "other", label: "Other" },
+];
+
 export interface User {
   id: string;
   name: string;
@@ -19,6 +30,13 @@ export interface SplitLine {
   value: number;
 }
 
+export interface Comment {
+  id: string;
+  userId: string;
+  text: string;
+  createdAt: string;
+}
+
 export interface Expense {
   id: string;
   title: string;
@@ -30,6 +48,9 @@ export interface Expense {
   participants: string[];
   splitType: SplitType;
   splits: SplitLine[];
+  category?: Category;
+  receipt?: string; // data URL
+  comments?: Comment[];
 }
 
 export interface Settlement {
@@ -39,6 +60,15 @@ export interface Settlement {
   amountHome: number;
   paid: boolean;
   markedAt?: string;
+}
+
+export interface Notification {
+  id: string;
+  userId: string;
+  tripId?: string;
+  text: string;
+  createdAt: string;
+  read: boolean;
 }
 
 export interface Trip {
@@ -54,10 +84,13 @@ export interface Trip {
   expenses: Expense[];
   settlements: Settlement[];
   createdAt: string;
+  defaultParticipants?: string[];
+  comments?: Comment[];
 }
 
 export interface DB {
   users: User[];
   trips: Trip[];
   sessionUserId: string | null;
+  notifications?: Notification[];
 }
